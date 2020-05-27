@@ -22,19 +22,19 @@ endif
 # Add inputs and outputs from these tool invocations to the build variables 
 
 # All Target
-all: DE1_SoC_demo_hps_linux
+all: IGBT_DE10_Nano_Eclipse_v1.0
 
 # Tool invocations
-DE1_SoC_demo_hps_linux: $(OBJS) $(USER_OBJS)
+IGBT_DE10_Nano_Eclipse_v1.0: $(OBJS) $(USER_OBJS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: GCC C Linker 4 [arm-linux-gnueabihf]'
-	arm-linux-gnueabihf-gcc  -o "DE1_SoC_demo_hps_linux" $(OBJS) $(USER_OBJS) $(LIBS)
+	arm-linux-gnueabihf-gcc  -o "IGBT_DE10_Nano_Eclipse_v1.0" $(OBJS) $(USER_OBJS) $(LIBS)
 	@echo 'Finished building target: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(RM) $(EXECUTABLES) $(OBJS) $(C_DEPS) DE1_SoC_demo_hps_linux 
+	-$(RM) $(EXECUTABLES) $(OBJS) $(C_DEPS) IGBT_DE10_Nano_Eclipse_v1.0 
 	-@echo ' '
 
 .PHONY: all clean dependents

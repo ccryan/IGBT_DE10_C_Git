@@ -3,9 +3,9 @@ FPGA direct pulse to IGBT
 This project is based on Intel GHRD program, which demonstrate how to use hps communicate with FPGA through light AXI Bridge.
 
 Author: Cheng Chen
-2020-02-24	add ethernet-UDP connection
-2020-03 	36 IGBT channels
-2020-04-25 	add hall effect sensor function
+2020-02-24 	add ethernet-UDP connection
+2020-05		36 channels with 3 channels of i2c
+2020-5-18 	Fix the temperature value problem: show 500+ degree instead of room temperature
 */
 
 
@@ -253,18 +253,18 @@ void tca_channel_select(uint8_t channel_addr, uint8_t en_mesg){
 
 		uint8_t TCAADDR = 0x70;	// hardwired address of TCA9548A is 0x70
 
-		alt_write_word( (h2p_i2c_ext_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
-		check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
-		i2c_rxdata_flush(h2p_i2c_ext_addr, en_mesg);
+		alt_write_word( (h2p_i2c_ext_1_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
+		check_i2c_isr_stat (h2p_i2c_ext_1_addr, en_mesg);
+		i2c_rxdata_flush(h2p_i2c_ext_1_addr, en_mesg);
 
-		alt_write_word( (h2p_i2c_ext_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
+		alt_write_word( (h2p_i2c_ext_1_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
 
-		alt_write_word( (h2p_i2c_ext_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
-		alt_write_word( (h2p_i2c_ext_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
-		alt_write_word( (h2p_i2c_ext_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
+		alt_write_word( (h2p_i2c_ext_1_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_1_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_1_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
 
-		alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (TCAADDR<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
-		alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | (channel_addr & I2C_DATA_MSK) );	 			//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		alt_write_word( (h2p_i2c_ext_1_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (TCAADDR<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		alt_write_word( (h2p_i2c_ext_1_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | (channel_addr & I2C_DATA_MSK) );	 			//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
 
 		for (i = 0; i <= 5; i = i +1) {
 			if (channel_addr << i && en_mesg){
@@ -474,12 +474,16 @@ void rd_hall_sens_data (uint8_t i2c_addr_relay) {
 	ZDigit = ZDigit << 4;
 	TempDigit = TempDigit << 4;
 
+	// There is a problem about TempDigit where the first digit should be always 1. In test, it is found sometimes it is zero, turning the temperature to 500+ C degree.
+	// Force the digit to 1 now. TempDigit should be negative decimal.
+	TempDigit = TempDigit | Temperature_FIRSTBIT_MSK;
+
 	XGauss = ((double) XDigit/16) / 1; // divide by 1 and .25 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
 	YGauss = ((double) YDigit/16) / 1;
 	ZGauss = ((double) ZDigit/16) / .25;
 	Temp = 273.15 + (((double) TempDigit/16) / 8); // divide by 8 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
 
-	printf("sensor address %d \n ", i2c_addr_relay);
+	printf("sensor address %d\n ", i2c_addr_relay);
 	printf("X = %5.2f Gauss\n", XGauss);
 	printf("Y = %5.2f Gauss\n", YGauss);
 	printf("Z = %5.2f Gauss\n", ZGauss);
@@ -507,10 +511,9 @@ void write_Hall_reading_to_txt(uint32_t sensor_address){
 
 	fptr = fopen(pathname, "a+");
 	fprintf(fptr, "Time \t\t Sensor \t X \t Y \t Z \t Temp \n");
-	fprintf(fptr, "%04d_%02d_%02d, %02d_%02d_%02d", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec);
-
+	fprintf(fptr, "%04d_%02d_%02d, %02d_%02d_%02d \n", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec);
 	for(i = 0 ; i <= 4; i++){
-		fprintf(fptr, "channel_%d \n", sensor_address);
+		fprintf(fptr, "channel_%d", sensor_address);
 		rd_hall_sens_data(sensor_address);
 		usleep(100000);
 	}
@@ -654,9 +657,7 @@ void time_test_function(){
     UDP_TRANSMISSION_OFF();
 }
 
-/*
 
-// IGBT main function
 int main(int argc, char * argv[]) {
 
 	int igbt_pulse_num = 18;
@@ -668,7 +669,7 @@ int main(int argc, char * argv[]) {
 	}; // Quartus minimum resolution 20ns, convert into us
 	long unsigned pulse_spacing_us  = atoi(argv[19]);
 	unsigned int number_of_iteration = atoi(argv[20]);
-
+	int sensor_channel = atoi(argv[21]);
 	open_physical_memory_device();
     mmap_peripherals();
 
@@ -698,7 +699,7 @@ int main(int argc, char * argv[]) {
 	*(uint32_t *)h2p_lw_led_addr = ~led_mask & IGBT_channel_all_off;
 	//printf("PulseTime = 50 \n");
 
-
+*/
 
     //create_measurement_folder("CPMG");
 
@@ -721,12 +722,10 @@ int main(int argc, char * argv[]) {
 		printf("Hall Effect Sensor directly connects to FPGA\n");
 	}
 
-	write_Hall_reading_to_txt(0);
-	write_Hall_reading_to_txt(2);
+	//write_Hall_reading_to_txt(99);
+	write_Hall_reading_to_txt(sensor_channel);
 
-    /-------------------Write Hall effect sensor----------------------/
-   	// Hall effect sensor address can be programmed
-    wr_hall_sens_data(0, 2); // write Hall effect sensor address
+	//write_Hall_reading_to_txt(1);
 
     // pulse length < pulse_spacing. pulse_spacing should be as wide as pulse length, i.e. 50% duty cycle
     for(i = 1; i< igbt_pulse_num-1; i++){
@@ -738,49 +737,15 @@ int main(int argc, char * argv[]) {
 
     }
 
+    //*****************Write Hall effect sensor********************//
+   	// Hall effect sensor address can be programmed
+    // wr_hall_sens_data(0, 36); // write Hall effect sensor address
+
     IGBT_Single_Pulse(pulse_spacing_us, number_of_iteration, pulse_length);
     printf("Pulse Complete! \n");
 
-    write_Hall_reading_to_txt(2);
-
-    // clean up our memory mapping and exit
-	//close_system();
-
-    munmap_peripherals();
-    close_physical_memory_device();
-
-	return( 0 );
-}
-*/
-
-// set hall effect sensor
-int main(int argc, char * argv[]) {
-
-	int igbt_pulse_num = 18;
-	unsigned int sen_addr = atoi(argv[1]);
-
-	open_physical_memory_device();
-    mmap_peripherals();
-
-	if (HUB_IN_USE){
-		tca_channel_select(HUB_channel_all_on, ENABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-5
-																	// HUB_channel_all_on/ HUB_channel_{X}_on, X = 0-5
-		// tca_channel_check
-		printf("Hall Effect Sensor connects to HUB\n");
-		//printf("ojbk");
-	}
-	else {
-		printf("Hall Effect Sensor directly connects to FPGA\n");
-	}
-
-	write_Hall_reading_to_txt(0);
-	write_Hall_reading_to_txt(sen_addr);
-
-    //*****************Write Hall effect sensor********************//
-   	// Hall effect sensor address can be programmed
-    //wr_hall_sens_data(0, sen_addr); // write Hall effect sensor address
-
-    //write_Hall_reading_to_txt(2);
+    write_Hall_reading_to_txt(sensor_channel);
+    //write_Hall_reading_to_txt(108);
 
     // clean up our memory mapping and exit
 	//close_system();

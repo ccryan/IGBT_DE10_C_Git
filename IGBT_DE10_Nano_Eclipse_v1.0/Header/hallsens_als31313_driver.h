@@ -93,6 +93,8 @@
 		#define Vola29_Hall_Mode_Status_BASEMASK	(0b11)
 		#define Vola29_Temperature_LSBs_BASEMASK	(0b111111)
 
+#define Temperature_FIRSTBIT_MSK 	(0b1000000000000000)
+
 #define Customer_Access_OFST		(0x35)	// An access code must be sent to the device prior to writing any of the volatile registers or EEPROM in the ALS31313
 											//If customer access mode is not enabled, then no writes to the device are allowed.
 #define Customer_Access_Data		(0x2C413534)

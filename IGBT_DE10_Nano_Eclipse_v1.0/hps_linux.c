@@ -123,6 +123,8 @@ void mmap_fpga_peripherals() {
 	// pulse length control
 	for (i = 0; i<32; i++){
 		*(h2p_igbt_pulse_addr+i)	= h2f_lw_axi_master + PULSE_LENGTH_PIO_0_BASE + increment*i;
+		//int x = PULSE_LENGTH_PIO_0_BASE + increment*i;
+		//printf("%x\n", x);
 	}
 	/*
 	*h2p_igbt_pulse_addr	= h2f_lw_axi_master + PULSE_LENGTH_PIO_0_BASE;
@@ -478,18 +480,19 @@ void rd_hall_sens_data (uint8_t i2c_addr_relay) {
 	// Force the digit to 1 now. TempDigit should be negative decimal.
 	TempDigit = TempDigit | Temperature_FIRSTBIT_MSK;
 
-	XGauss = ((double) XDigit/16) / 1; // divide by 1 and .25 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
-	YGauss = ((double) YDigit/16) / 1;
-	ZGauss = ((double) ZDigit/16) / .25;
-	Temp = 273.15 + (((double) TempDigit/16) / 8); // divide by 8 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
+	XGauss = (((double) XDigit)/16) / 1; // divide by 1 and .25 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
+	YGauss = (((double) YDigit)/16) / 1;
+	ZGauss = (((double) ZDigit)/16) / .25;
+	Temp = 273.15 + ((((double) TempDigit)/16) / 8); // divide by 8 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
 
-	printf("sensor address %d\n ", i2c_addr_relay);
-	printf("X = %5.2f Gauss\n", XGauss);
-	printf("Y = %5.2f Gauss\n", YGauss);
-	printf("Z = %5.2f Gauss\n", ZGauss);
-	printf("Temp = %5.2f %%C\n", Temp);
-	printf("\n");
-
+	if (DISABLE_MESSAGE){
+		printf("sensor address %d\n ", i2c_addr_relay);
+		printf("X = %5.2f Gauss\n", XGauss);
+		printf("Y = %5.2f Gauss\n", YGauss);
+		printf("Z = %5.2f Gauss\n", ZGauss);
+		printf("Temp = %5.2f %%C\n", Temp);
+		printf("\n");
+	}
 	if (UDP_TRANSMISSION_STATUS){
 		sprintf(udp_buffer,"\t, %d \t , %5.2f \t , %5.2f \t , %5.2f \t , %5.2f \n",i2c_addr_relay,XGauss,YGauss,ZGauss,Temp);
 		n=sendto(udp_sock, udp_buffer, strlen(udp_buffer),0,(const struct sockaddr *)&udp_server, udp_length);
@@ -499,7 +502,7 @@ void rd_hall_sens_data (uint8_t i2c_addr_relay) {
 		fprintf(fptr, "\t, %d \t , %5.2f \t , %5.2f \t , %5.2f \t , %5.2f \n",i2c_addr_relay,XGauss,YGauss,ZGauss,Temp);
 }
 
-void write_Hall_reading_to_txt(uint32_t sensor_address){
+void write_Hall_reading_to_txt(uint32_t sensor_address, uint32_t num_iter){
 	//Set time
 	time_t t = time(NULL);
 	struct tm *local = localtime(&t);
@@ -512,11 +515,36 @@ void write_Hall_reading_to_txt(uint32_t sensor_address){
 	fptr = fopen(pathname, "a+");
 	fprintf(fptr, "Time \t\t Sensor \t X \t Y \t Z \t Temp \n");
 	fprintf(fptr, "%04d_%02d_%02d, %02d_%02d_%02d \n", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec);
-	for(i = 0 ; i <= 4; i++){
+	for(i = 0 ; i <= num_iter-1; i++){
 		fprintf(fptr, "channel_%d", sensor_address);
 		rd_hall_sens_data(sensor_address);
 		usleep(100000);
 	}
+
+	fclose(fptr);
+
+	//char command[1024];
+	//sprintf(command,"rm %s","Current_Reading.csv");
+
+	// added to read csv file easier
+	// Open current reading csv file
+	fptr_tmp = fopen("Current_Reading.csv", "w");
+	if (fptr_tmp == NULL)
+	{
+		printf("Cannot open file %s \n", fptr_tmp);
+		exit(0);
+	}
+
+	// Copy contents to reading file
+	fptr = fopen(pathname, "r");
+	char line[1024];
+	while (fgets(line, 1024, fptr))
+	{
+		//printf("%s",line);
+		fputs(line,fptr_tmp);
+	}
+
+	fclose(fptr_tmp);
 	fclose(fptr);
 }
 
@@ -657,19 +685,97 @@ void time_test_function(){
     UDP_TRANSMISSION_OFF();
 }
 
+/*
+int main(int argc, char * argv[]) {
+
+	int sensor_channel = atoi(argv[1]);
+	int num_iteration = atoi(argv[2]);
+
+	open_physical_memory_device();
+    mmap_peripherals();
+
+    //create_measurement_folder("CPMG");
+
+
+    // UDP test
+    UDP_TRANSMISSION_STATUS = UDP_TRANSMISSION_DISABLE;
+    if (UDP_TRANSMISSION_DISABLE){
+		UDP_TRANSMISSION_ON();
+		time_test_function();
+		UDP_TRANSMISSION_OFF();
+    }
+
+	if (HUB_IN_USE){
+		tca_channel_select(HUB_channel_all_on, ENABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-5
+																	// HUB_channel_all_on/ HUB_channel_{X}_on, X = 0-5
+		// tca_channel_check
+		printf("Hall Effect Sensor connects to HUB\n");
+		//printf("ojbk");
+	}
+	else {
+		printf("Hall Effect Sensor directly connects to FPGA\n");
+	}
+
+	//write_Hall_reading_to_txt(99);
+	write_Hall_reading_to_txt(sensor_channel, num_iteration);
+
+    // clean up our memory mapping and exit
+	//close_system();
+
+    munmap_peripherals();
+    close_physical_memory_device();
+
+	return( 0 );
+}
+*/
 
 int main(int argc, char * argv[]) {
 
 	int igbt_pulse_num = 18;
-	unsigned int pulse_length[] = {atoi(argv[1])*50, atoi(argv[2])*50, atoi(argv[3])*50, atoi(argv[4])*50,
-			atoi(argv[5])*50, atoi(argv[6])*50, atoi(argv[7])*50, atoi(argv[8])*50,
-			atoi(argv[9])*50, atoi(argv[10])*50, atoi(argv[11])*50, atoi(argv[12])*50,
-			atoi(argv[13])*50, atoi(argv[14])*50, atoi(argv[15])*50, atoi(argv[16])*50,
-			atoi(argv[17])*50, atoi(argv[18])*50
+
+	unsigned int pulse_length[] = {	atoi(argv[1])*50,
+									atoi(argv[2])*50,
+									atoi(argv[3])*50,
+									atoi(argv[4])*50,
+									atoi(argv[5])*50,
+									atoi(argv[6])*50,
+									atoi(argv[7])*50,
+									atoi(argv[8])*50,
+									atoi(argv[9])*50,
+									atoi(argv[10])*50,
+									atoi(argv[11])*50,
+									atoi(argv[12])*50,
+									atoi(argv[13])*50,
+									atoi(argv[14])*50,
+									atoi(argv[15])*50,
+									atoi(argv[16])*50,
+									atoi(argv[17])*50,
+									atoi(argv[18])*50,
+
+									atoi(argv[19])*50,
+									atoi(argv[20])*50,
+									atoi(argv[21])*50,
+									atoi(argv[22])*50,
+									atoi(argv[23])*50,
+									atoi(argv[24])*50,
+									atoi(argv[25])*50,
+									atoi(argv[26])*50,
+									atoi(argv[27])*50,
+									atoi(argv[28])*50,
+									atoi(argv[29])*50,
+									atoi(argv[30])*50,
+									atoi(argv[31])*50,
+									atoi(argv[32])*50,
+									atoi(argv[33])*50,
+									atoi(argv[34])*50,
+									atoi(argv[35])*50,
+									atoi(argv[36])*50
 	}; // Quartus minimum resolution 20ns, convert into us
-	long unsigned pulse_spacing_us  = atoi(argv[19]);
-	unsigned int number_of_iteration = atoi(argv[20]);
-	int sensor_channel = atoi(argv[21]);
+	long unsigned pulse_spacing_us  = atoi(argv[37]);
+	unsigned int number_of_iteration = atoi(argv[38]);
+
+	//int sensor_channel = atoi(argv[39]);
+
 	open_physical_memory_device();
     mmap_peripherals();
 
@@ -703,6 +809,7 @@ int main(int argc, char * argv[]) {
 
     //create_measurement_folder("CPMG");
 
+
     // UDP test
     UDP_TRANSMISSION_STATUS = UDP_TRANSMISSION_DISABLE;
     if (UDP_TRANSMISSION_DISABLE){
@@ -722,10 +829,6 @@ int main(int argc, char * argv[]) {
 		printf("Hall Effect Sensor directly connects to FPGA\n");
 	}
 
-	//write_Hall_reading_to_txt(99);
-	write_Hall_reading_to_txt(sensor_channel);
-
-	//write_Hall_reading_to_txt(1);
 
     // pulse length < pulse_spacing. pulse_spacing should be as wide as pulse length, i.e. 50% duty cycle
     for(i = 1; i< igbt_pulse_num-1; i++){
@@ -737,14 +840,15 @@ int main(int argc, char * argv[]) {
 
     }
 
-    //*****************Write Hall effect sensor********************//
+    //----------------Write Hall effect sensor--------------------//
    	// Hall effect sensor address can be programmed
     // wr_hall_sens_data(0, 36); // write Hall effect sensor address
+    //write_Hall_reading_to_txt(sensor_channel, 5);
 
     IGBT_Single_Pulse(pulse_spacing_us, number_of_iteration, pulse_length);
     printf("Pulse Complete! \n");
 
-    write_Hall_reading_to_txt(sensor_channel);
+    //write_Hall_reading_to_txt(sensor_channel, 5);
     //write_Hall_reading_to_txt(108);
 
     // clean up our memory mapping and exit

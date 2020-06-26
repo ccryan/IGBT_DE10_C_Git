@@ -186,6 +186,7 @@ void tx_sampling(double tx_freq, double sampfreq, unsigned int samples_per_echo,
 
 // global variables
 FILE	*fptr;
+FILE	*fptr_tmp;
 long i;
 long j;
 // unsigned int rddata [128000];

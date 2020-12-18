@@ -6,6 +6,7 @@ Author: Cheng Chen
 2020-02-24 	add ethernet-UDP connection
 2020-05		36 channels with 3 channels of i2c
 2020-5-18 	Fix the temperature value problem: show 500+ degree instead of room temperature
+2020-06 	Merge with HallArray project, HallArray project used ALS31300-2000 instead of ALS31313-Joy
 */
 
 
@@ -121,7 +122,7 @@ void mmap_fpga_peripherals() {
 
 	int increment = 0x100;
 	// pulse length control
-	for (i = 0; i<32; i++){
+	for (i = 0; i<IGBT_Pulse_Channel; i++){
 		*(h2p_igbt_pulse_addr+i)	= h2f_lw_axi_master + PULSE_LENGTH_PIO_0_BASE + increment*i;
 		//int x = PULSE_LENGTH_PIO_0_BASE + increment*i;
 		//printf("%x\n", x);
@@ -151,7 +152,6 @@ void mmap_fpga_peripherals() {
 	h2p_i2c_ext_addr				= h2f_lw_axi_master + I2C_EXT_BASE;
 	h2p_i2c_int_addr				= h2f_lw_axi_master + I2C_INT_BASE;
 	h2p_i2c_ext_1_addr				= h2f_lw_axi_master + I2C_EXT_1_BASE;
-
 }
 
 void munmap_fpga_peripherals() {
@@ -250,30 +250,7 @@ void i2c_wait_transfer(volatile unsigned long * i2c_addr) {
 	while (! ( (alt_read_word( i2c_addr+ISR_OFST) & TX_READY_MSK) == TX_READY_MSK) ); // wait until TX_READY signal is asserted
 }
 
-// write/read file #define TCAADDR 0x70
-void tca_channel_select(uint8_t channel_addr, uint8_t en_mesg){
 
-		uint8_t TCAADDR = 0x70;	// hardwired address of TCA9548A is 0x70
-
-		alt_write_word( (h2p_i2c_ext_1_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
-		check_i2c_isr_stat (h2p_i2c_ext_1_addr, en_mesg);
-		i2c_rxdata_flush(h2p_i2c_ext_1_addr, en_mesg);
-
-		alt_write_word( (h2p_i2c_ext_1_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
-
-		alt_write_word( (h2p_i2c_ext_1_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
-		alt_write_word( (h2p_i2c_ext_1_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
-		alt_write_word( (h2p_i2c_ext_1_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
-
-		alt_write_word( (h2p_i2c_ext_1_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (TCAADDR<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
-		alt_write_word( (h2p_i2c_ext_1_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | (channel_addr & I2C_DATA_MSK) );	 			//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
-
-		for (i = 0; i <= 5; i = i +1) {
-			if (channel_addr << i && en_mesg){
-				printf("Channel %ld turned on \n", i);
-			}
-		}
-}
 
 void wr_hall_sens (uint8_t i2c_addr_relay, uint8_t reg_addr, uint32_t datain, uint8_t en_mesg){ // write command to the hall sensor
 
@@ -459,96 +436,7 @@ void rd_hall_sens_stat (uint8_t i2c_addr_relay) {
 
 }
 
-void rd_hall_sens_data (uint8_t i2c_addr_relay) {
-	uint32_t REG28 = rd_hall_sens_3 (i2c_addr_relay, Vola28_OFST, DISABLE_MESSAGE);
-	uint32_t REG29 = rd_hall_sens_3 (i2c_addr_relay, Vola29_OFST, DISABLE_MESSAGE);
-
-	int16_t XDigit, YDigit, ZDigit, TempDigit;
-	double XGauss, YGauss, ZGauss, Temp;
-	XDigit 		= (((REG28>>Vola28_X_Axis_MSBs_OFST) & Vola28_X_Axis_MSBs_BASEMASK)<<4) 			| ((REG29>>Vola29_X_Axis_LSBs_OFST) & Vola29_X_Axis_LSBs_BASEMASK); // combine MSB and LSB
-	YDigit 		= (((REG28>>Vola28_Y_Axis_MSBs_OFST) & Vola28_Y_Axis_MSBs_BASEMASK)<<4)		 		| ((REG29>>Vola29_Y_Axis_LSBs_OFST) & Vola29_Y_Axis_LSBs_BASEMASK); // combine MSB and LSB
-	ZDigit 		= (((REG28>>Vola28_Z_Axis_MSBs_OFST) & Vola28_Z_Axis_MSBs_BASEMASK)<<4) 			| ((REG29>>Vola29_Z_Axis_LSBs_OFST) & Vola29_Z_Axis_LSBs_BASEMASK); // combine MSB and LSB
-	TempDigit 	= (((REG28>>Vola28_Temperature_MSBs_OFST) & Vola28_Temperature_MSBs_BASEMASK)<<6) 	| ((REG29>>Vola29_Temperature_LSBs_OFST) & Vola29_Temperature_LSBs_BASEMASK); // combine MSB and LSB
-
-	// The integer container is 16-bit signed, so we need to shift by 4 because the data is 12-bit signed value. We need to maintain the sign at MSB.
-	XDigit = XDigit << 4;
-	YDigit = YDigit << 4;
-	ZDigit = ZDigit << 4;
-	TempDigit = TempDigit << 4;
-
-	// There is a problem about TempDigit where the first digit should be always 1. In test, it is found sometimes it is zero, turning the temperature to 500+ C degree.
-	// Force the digit to 1 now. TempDigit should be negative decimal.
-	TempDigit = TempDigit | Temperature_FIRSTBIT_MSK;
-
-	XGauss = (((double) XDigit)/16) / 1; // divide by 1 and .25 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
-	YGauss = (((double) YDigit)/16) / 1;
-	ZGauss = (((double) ZDigit)/16) / .25;
-	Temp = 273.15 + ((((double) TempDigit)/16) / 8); // divide by 8 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
-
-	if (DISABLE_MESSAGE){
-		printf("sensor address %d\n ", i2c_addr_relay);
-		printf("X = %5.2f Gauss\n", XGauss);
-		printf("Y = %5.2f Gauss\n", YGauss);
-		printf("Z = %5.2f Gauss\n", ZGauss);
-		printf("Temp = %5.2f %%C\n", Temp);
-		printf("\n");
-	}
-	if (UDP_TRANSMISSION_STATUS){
-		sprintf(udp_buffer,"\t, %d \t , %5.2f \t , %5.2f \t , %5.2f \t , %5.2f \n",i2c_addr_relay,XGauss,YGauss,ZGauss,Temp);
-		n=sendto(udp_sock, udp_buffer, strlen(udp_buffer),0,(const struct sockaddr *)&udp_server, udp_length);
-		if (n < 0) printf("Sendto\n\r");
-	}
-	else
-		fprintf(fptr, "\t, %d \t , %5.2f \t , %5.2f \t , %5.2f \t , %5.2f \n",i2c_addr_relay,XGauss,YGauss,ZGauss,Temp);
-}
-
-void write_Hall_reading_to_txt(uint32_t sensor_address, uint32_t num_iter){
-	//Set time
-	time_t t = time(NULL);
-	struct tm *local = localtime(&t);
-
-	// set up path and txt file name
-	sprintf(pathname,"%04d_%02d_%02d_%02d_%02d_%02d_%s", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec,"HallReading.csv");
-	// print to txt
-	//pathname=strcat(pathname,".csv");
-
-	fptr = fopen(pathname, "a+");
-	fprintf(fptr, "Time \t\t Sensor \t X \t Y \t Z \t Temp \n");
-	fprintf(fptr, "%04d_%02d_%02d, %02d_%02d_%02d \n", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec);
-	for(i = 0 ; i <= num_iter-1; i++){
-		fprintf(fptr, "channel_%d", sensor_address);
-		rd_hall_sens_data(sensor_address);
-		usleep(100000);
-	}
-
-	fclose(fptr);
-
-	//char command[1024];
-	//sprintf(command,"rm %s","Current_Reading.csv");
-
-	// added to read csv file easier
-	// Open current reading csv file
-	fptr_tmp = fopen("Current_Reading.csv", "w");
-	if (fptr_tmp == NULL)
-	{
-		printf("Cannot open file %s \n", fptr_tmp);
-		exit(0);
-	}
-
-	// Copy contents to reading file
-	fptr = fopen(pathname, "r");
-	char line[1024];
-	while (fgets(line, 1024, fptr))
-	{
-		//printf("%s",line);
-		fputs(line,fptr_tmp);
-	}
-
-	fclose(fptr_tmp);
-	fclose(fptr);
-}
-
-void IGBT_Single_Pulse(long unsigned pulse_spacing_us, unsigned int number_of_iteration, unsigned int pulse_length[3]){
+void IGBT_Single_Pulse(long unsigned pulse_spacing_us, unsigned int number_of_iteration, unsigned int *pulse_length){
 
 	int iterate = 1;
 
@@ -560,8 +448,9 @@ void IGBT_Single_Pulse(long unsigned pulse_spacing_us, unsigned int number_of_it
 		// channel 0-8 --> 9 magnets
 
 
-		for (i = 0; i<32; i++){
-			alt_write_word( *(h2p_igbt_pulse_addr+i) ,  pulse_length[i] );
+		for (i = 0; i<IGBT_Pulse_Channel; i++, pulse_length++){
+//printf("%d\n", *pulse_length);
+			alt_write_word( *(h2p_igbt_pulse_addr+i), *pulse_length);
 
 		}
 /*
@@ -685,17 +574,240 @@ void time_test_function(){
     UDP_TRANSMISSION_OFF();
 }
 
+//--------------------------------------------------------------------------------------------
+int num_sensor; // define number of sensor, global int
+
+
+// write/read file #define TCAADDR 0x70
+void tca_channel_select(uint8_t channel_addr, uint8_t en_mesg){
+
+		uint8_t TCAADDR = 0x70;	// hardwired address of TCA9548A is 0x70
+#ifdef I2C_EXT_1
+		alt_write_word( (h2p_i2c_ext_1_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
+		check_i2c_isr_stat (h2p_i2c_ext_1_addr, en_mesg);
+		i2c_rxdata_flush(h2p_i2c_ext_1_addr, en_mesg);
+
+		alt_write_word( (h2p_i2c_ext_1_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
+
+		alt_write_word( (h2p_i2c_ext_1_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_1_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_1_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
+
+		alt_write_word( (h2p_i2c_ext_1_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (TCAADDR<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		alt_write_word( (h2p_i2c_ext_1_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | (channel_addr & I2C_DATA_MSK) );	 			//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+		for (i = 0; i <= 5; i = i +1) {
+			if (channel_addr << i && en_mesg){
+				printf("Channel %ld turned on \n", i);
+			}
+		}
+#endif
+
+#ifdef I2C_EXT
+		alt_write_word( (h2p_i2c_ext_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
+		check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		i2c_rxdata_flush(h2p_i2c_ext_addr, en_mesg);
+
+		alt_write_word( (h2p_i2c_ext_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
+
+		alt_write_word( (h2p_i2c_ext_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
+
+		alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (TCAADDR<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | (channel_addr & I2C_DATA_MSK) );	 			//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+		for (i = 0; i <= 5; i = i +1) {
+			if (channel_addr << i && en_mesg){
+				printf("Channel %ld turned on \n", i);
+			}
+		}
+#endif
+}
+
+void rd_hall_sens_data (uint8_t i2c_addr_relay, int enable_message) {
+
+#ifdef I2C_EXT_1
+	uint32_t REG28 = rd_hall_sens_3 (i2c_addr_relay, Vola28_OFST, DISABLE_MESSAGE);
+	uint32_t REG29 = rd_hall_sens_3 (i2c_addr_relay, Vola29_OFST, DISABLE_MESSAGE);
+#endif
+
+#ifdef I2C_EXT
+	uint32_t REG28 = rd_hall_sens (i2c_addr_relay, Vola28_OFST, DISABLE_MESSAGE);
+	uint32_t REG29 = rd_hall_sens (i2c_addr_relay, Vola29_OFST, DISABLE_MESSAGE);
+#endif
+
+	int16_t XDigit, YDigit, ZDigit, TempDigit;
+	double XGauss, YGauss, ZGauss, Temp;
+	XDigit 		= (((REG28>>Vola28_X_Axis_MSBs_OFST) & Vola28_X_Axis_MSBs_BASEMASK)<<4) 			| ((REG29>>Vola29_X_Axis_LSBs_OFST) & Vola29_X_Axis_LSBs_BASEMASK); // combine MSB and LSB
+	YDigit 		= (((REG28>>Vola28_Y_Axis_MSBs_OFST) & Vola28_Y_Axis_MSBs_BASEMASK)<<4)		 		| ((REG29>>Vola29_Y_Axis_LSBs_OFST) & Vola29_Y_Axis_LSBs_BASEMASK); // combine MSB and LSB
+	ZDigit 		= (((REG28>>Vola28_Z_Axis_MSBs_OFST) & Vola28_Z_Axis_MSBs_BASEMASK)<<4) 			| ((REG29>>Vola29_Z_Axis_LSBs_OFST) & Vola29_Z_Axis_LSBs_BASEMASK); // combine MSB and LSB
+	TempDigit 	= (((REG28>>Vola28_Temperature_MSBs_OFST) & Vola28_Temperature_MSBs_BASEMASK)<<6) 	| ((REG29>>Vola29_Temperature_LSBs_OFST) & Vola29_Temperature_LSBs_BASEMASK); // combine MSB and LSB
+
+	// The integer container is 16-bit signed, so we need to shift by 4 because the data is 12-bit signed value. We need to maintain the sign at MSB.
+	XDigit = XDigit << 4;
+	YDigit = YDigit << 4;
+	ZDigit = ZDigit << 4;
+	TempDigit = TempDigit << 4;
+
+	// There is a problem about TempDigit where the first digit should be always 1. In test, it is found sometimes it is zero, turning the temperature to 500+ C degree.
+	// Force the digit to 1 now. TempDigit should be negative decimal.
+	TempDigit = TempDigit | Temperature_FIRSTBIT_MSK;
+
+	XGauss = (((double) XDigit)/16) / 1; // divide by 1 and .25 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
+	YGauss = (((double) YDigit)/16) / 1;
+	ZGauss = (((double) ZDigit)/16) / .25;
+	Temp = 273.15 + ((((double) TempDigit)/16) / 8); // divide by 8 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
+
+	if (enable_message){ //DISABLE_MESSAGE
+		printf("sensor address %d\n ", i2c_addr_relay);
+		printf("X = %5.2f Gauss\n", XGauss);
+		printf("Y = %5.2f Gauss\n", YGauss);
+		printf("Z = %5.2f Gauss\n", ZGauss);
+		printf("Temp = %5.2f %%C\n", Temp);
+		printf("\n");
+	}
+	if (UDP_TRANSMISSION_STATUS){
+		sprintf(udp_buffer,"\t, %d \t , %5.2f \t , %5.2f \t , %5.2f \t , %5.2f \n",i2c_addr_relay,XGauss,YGauss,ZGauss,Temp);
+		n=sendto(udp_sock, udp_buffer, strlen(udp_buffer),0,(const struct sockaddr *)&udp_server, udp_length);
+		if (n < 0) printf("Sendto\n\r");
+	}
+	else
+		fprintf(fptr, ", %d, %5.2f, %5.2f, %5.2f, %5.2f \n",i2c_addr_relay,XGauss,YGauss,ZGauss,Temp);
+}
+
+void write_Hall_reading_to_txt(uint32_t sensor_address, uint32_t num_iter, int enable_message){
+	//Set time
+	time_t t = time(NULL);
+	struct tm *local = localtime(&t);
+
+	// set up path and txt file name
+	sprintf(pathname,"%04d_%02d_%02d_%02d_%02d_%02d_%02d_%s", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec, sensor_address, "HallReading.csv");
+	// print to txt
+	//pathname=strcat(pathname,".csv");
+
+	fptr = fopen(pathname, "a+");
+	fprintf(fptr, "Time \t\t Sensor \t X \t Y \t Z \t Temp \n");
+	fprintf(fptr, "%04d_%02d_%02d, %02d_%02d_%02d \n", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec);
+	for(i = 0 ; i <= num_iter-1; i++){
+		fprintf(fptr, "channel_%d", sensor_address);
+		rd_hall_sens_data(sensor_address, enable_message);
+		//usleep(100000);
+	}
+
+	fclose(fptr);
+
+	//char command[1024];
+	//sprintf(command,"rm %s","Current_Reading.csv");
+
+	// added to read csv file easier
+	// Open current reading csv file
+	// set up path and txt file name
+	sprintf(pathname_tmp,"%s_%02d%s",  "Current_Reading",sensor_address,".csv");
+
+	fptr_tmp = fopen(pathname_tmp, "w");
+	if (fptr_tmp == NULL)
+	{
+		printf("Cannot open file %s \n", fptr_tmp);
+		exit(0);
+	}
+
+	// Copy contents to reading file
+	fptr = fopen(pathname, "r");
+	char line[1024];
+	while (fgets(line, 1024, fptr))
+	{
+		//printf("%s",line);
+		fputs(line,fptr_tmp);
+	}
+
+	fclose(fptr_tmp);
+	fclose(fptr);
+}
+
+void write_Hall_reading_to_txt_multi(int *sensor_address, uint32_t num_iter, int enable_message){
+	//Set time
+	time_t t = time(NULL);
+	struct tm *local = localtime(&t);
+
+	// set up path and txt file name
+	sprintf(pathname,"%04d_%02d_%02d_%02d_%02d_%02d_%s", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec, "HallReading.csv");
+	// print to txt
+	//pathname=strcat(pathname,".csv");
+
+	fptr = fopen(pathname, "a+");
+	fprintf(fptr, "Time \t\t Sensor \t X \t Y \t Z \t Temp \n");
+	fprintf(fptr, "%04d_%02d_%02d, %02d_%02d_%02d \n", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec);
+
+	for(j = 0 ; j <= num_sensor - 1; j++, sensor_address++){
+		for(i = 0 ; i <= num_iter-1; i++){
+			fprintf(fptr, "channel_%d", *sensor_address);
+			rd_hall_sens_data(*sensor_address, enable_message);
+			usleep(100000);
+		}
+	}
+
+	fclose(fptr);
+
+	//char command[1024];
+	//sprintf(command,"rm %s","Current_Reading.csv");
+
+	// added to read csv file easier
+	// Open current reading csv file
+	// set up path and txt file name
+	sprintf(pathname_tmp,"%s",  "Current_Reading.csv");
+
+	fptr_tmp = fopen(pathname_tmp, "w");
+	if (fptr_tmp == NULL)
+	{
+		printf("Cannot open file %s \n", fptr_tmp);
+		exit(0);
+	}
+
+	// Copy contents to reading file
+	fptr = fopen(pathname, "r");
+	char line[1024];
+	while (fgets(line, 1024, fptr))
+	{
+		//printf("%s",line);
+		fputs(line,fptr_tmp);
+	}
+
+	fclose(fptr_tmp);
+	fclose(fptr);
+}
+
 /*
+// Multi (18) Sensor Reading
 int main(int argc, char * argv[]) {
 
-	int sensor_channel = atoi(argv[1]);
-	int num_iteration = atoi(argv[2]);
+	int sensor_channel[]= { atoi(argv[1]),
+			 atoi(argv[2]),
+			 atoi(argv[3]),
+			 atoi(argv[4]),
+			 atoi(argv[5]),
+			 atoi(argv[6]),
+			 atoi(argv[7]),
+			 atoi(argv[8]),
+			 atoi(argv[9]),
+			 atoi(argv[10]),
+			 atoi(argv[11]),
+			 atoi(argv[12]),
+			 atoi(argv[13]),
+			 atoi(argv[14]),
+			 atoi(argv[15]),
+			 atoi(argv[16]),
+			 atoi(argv[17]),
+			 atoi(argv[18])
+	};
+
+	int num_iteration = atoi(argv[19]);
+	int enable_message = atoi(argv[20]);
 
 	open_physical_memory_device();
     mmap_peripherals();
 
     //create_measurement_folder("CPMG");
-
 
     // UDP test
     UDP_TRANSMISSION_STATUS = UDP_TRANSMISSION_DISABLE;
@@ -716,8 +828,16 @@ int main(int argc, char * argv[]) {
 		printf("Hall Effect Sensor directly connects to FPGA\n");
 	}
 
-	//write_Hall_reading_to_txt(99);
-	write_Hall_reading_to_txt(sensor_channel, num_iteration);
+    //----------------Write Hall effect sensor--------------------//
+   	// Hall effect sensor address can be programmed
+    //wr_hall_sens_data(0, 18); // write Hall effect sensor address
+
+	//write_Hall_reading_to_txt_multi(sensor_channel, num_iteration, enable_message);
+
+
+	for(j = 0; j < num_sensor; j++){
+		write_Hall_reading_to_txt_multi(sensor_channel[j], num_iteration, enable_message);
+	}
 
     // clean up our memory mapping and exit
 	//close_system();
@@ -729,11 +849,222 @@ int main(int argc, char * argv[]) {
 }
 */
 
+/*
+// Multi (9) Sensor Reading
 int main(int argc, char * argv[]) {
 
-	int igbt_pulse_num = 18;
+	int sensor_channel[]= { atoi(argv[1]),
+			 atoi(argv[2]),
+			 atoi(argv[3]),
+			 atoi(argv[4]),
+			 atoi(argv[5]),
+			 atoi(argv[6]),
+			 atoi(argv[7]),
+			 atoi(argv[8]),
+			 atoi(argv[9]),
+	};
 
-	unsigned int pulse_length[] = {	atoi(argv[1])*50,
+	int num_iteration = atoi(argv[10]);
+	int enable_message = atoi(argv[11]);
+
+	open_physical_memory_device();
+    mmap_peripherals();
+
+    num_sensor = 9;
+    //create_measurement_folder("CPMG");
+
+    // UDP test
+    UDP_TRANSMISSION_STATUS = UDP_TRANSMISSION_DISABLE;
+    if (UDP_TRANSMISSION_DISABLE){
+		UDP_TRANSMISSION_ON();
+		time_test_function();
+		UDP_TRANSMISSION_OFF();
+    }
+
+	if (HUB_IN_USE){
+		tca_channel_select(HUB_channel_all_on, ENABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-5
+																	// HUB_channel_all_on/ HUB_channel_{X}_on, X = 0-5
+		// tca_channel_check
+		printf("Hall Effect Sensor connects to HUB\n");
+		//printf("ojbk");
+	}
+	else {
+		printf("Hall Effect Sensor directly connects to FPGA\n");
+	}
+
+    //----------------Write Hall effect sensor--------------------//
+   	// Hall effect sensor address can be programmed
+    //wr_hall_sens_data(0, 18); // write Hall effect sensor address
+
+	write_Hall_reading_to_txt_multi(sensor_channel, num_iteration, enable_message);
+
+
+	//for(j = 0; j < num_sensor; j++){
+	//	write_Hall_reading_to_txt_multi(sensor_channel[j], num_iteration, enable_message);
+	//}
+
+    // clean up our memory mapping and exit
+	//close_system();
+
+    munmap_peripherals();
+    close_physical_memory_device();
+
+	return( 0 );
+}
+
+
+
+//-----------------------------------------------------------------------------------
+
+// Single Sensor Reading
+int main(int argc, char * argv[]) {
+
+	int sensor_channel = atoi(argv[1]);
+	int num_iteration = atoi(argv[2]);
+
+	open_physical_memory_device();
+    mmap_peripherals();
+
+    //create_measurement_folder("CPMG");
+
+
+    // UDP test
+    UDP_TRANSMISSION_STATUS = UDP_TRANSMISSION_DISABLE;
+    if (UDP_TRANSMISSION_DISABLE){
+		UDP_TRANSMISSION_ON();
+		time_test_function();
+		UDP_TRANSMISSION_OFF();
+    }
+
+	if (HUB_IN_USE){
+		//tca_channel_select(HUB_channel_all_on, ENABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-5
+																	// HUB_channel_all_on/ HUB_channel_{X}_on, X = 0-5
+		tca_channel_select(HUB_channel_all_on, ENABLE_MESSAGE);
+		// tca_channel_check
+		printf("Hall Effect Sensor connects to HUB\n");
+		//printf("ojbk");
+	}
+	else {
+		printf("Hall Effect Sensor directly connects to FPGA\n");
+	}
+
+	//write_Hall_reading_to_txt(99);
+	write_Hall_reading_to_txt(sensor_channel, num_iteration, 1);
+
+    // clean up our memory mapping and exit
+	//close_system();
+
+    munmap_peripherals();
+    close_physical_memory_device();
+
+	return( 0 );
+}
+*/
+
+//-----------------------------------------------------------------------------------
+// IGBT pulsing 36 channels
+/*
+int main(int argc, char * argv[]) {
+
+	int igbt_pulse_num = 36;
+
+	unsigned int pulse_length[] = {atoi(argv[1])*50,
+									atoi(argv[2])*50,
+									atoi(argv[3])*50,
+									atoi(argv[4])*50,
+
+									atoi(argv[5])*50,
+									atoi(argv[6])*50,
+									atoi(argv[7])*50,
+									atoi(argv[8])*50,
+									atoi(argv[9])*50,
+									atoi(argv[10])*50,
+									atoi(argv[11])*50,
+									atoi(argv[12])*50,
+									atoi(argv[13])*50,
+									atoi(argv[14])*50,
+									atoi(argv[15])*50,
+									atoi(argv[16])*50,
+									atoi(argv[17])*50,
+									atoi(argv[18])*50,
+
+									atoi(argv[19])*50,
+									atoi(argv[20])*50,
+									atoi(argv[21])*50,
+									atoi(argv[22])*50,
+									atoi(argv[23])*50,
+									atoi(argv[24])*50,
+									atoi(argv[25])*50,
+									atoi(argv[26])*50,
+									atoi(argv[27])*50,
+									atoi(argv[28])*50,
+									atoi(argv[29])*50,
+									atoi(argv[30])*50,
+									atoi(argv[31])*50,
+									atoi(argv[32])*50,
+									atoi(argv[33])*50,
+									atoi(argv[34])*50,
+									atoi(argv[35])*50,
+									atoi(argv[36])*50
+	}; // Quartus minimum resolution 20ns, convert into us
+
+	long unsigned pulse_spacing_us  = atoi(argv[37]);
+	unsigned int number_of_iteration = atoi(argv[38]);
+
+	//int sensor_channel = atoi(argv[39]);
+
+	open_physical_memory_device();
+    mmap_peripherals();
+
+    //create_measurement_folder("CPMG");
+
+
+    // UDP test
+    UDP_TRANSMISSION_STATUS = UDP_TRANSMISSION_DISABLE;
+    if (UDP_TRANSMISSION_DISABLE){
+		UDP_TRANSMISSION_ON();
+		time_test_function();
+		UDP_TRANSMISSION_OFF();
+    }
+
+    // pulse length < pulse_spacing. pulse_spacing should be as wide as pulse length, i.e. 50% duty cycle
+    for(i = 1; i< igbt_pulse_num+1; i++){
+    	if ( pulse_length[i-1]/50 >= pulse_spacing_us/2 ){
+	        printf("Error: duty cycle is smaller than pulse length! \n");
+	        close(fd_dev_mem);
+	        exit(EXIT_FAILURE);
+    	}
+    }
+
+    //pulse_length[0] = 1000000000;
+    //----------------Write Hall effect sensor--------------------//
+   	// Hall effect sensor address can be programmed
+    // wr_hall_sens_data(0, 36); // write Hall effect sensor address
+    //write_Hall_reading_to_txt(sensor_channel, 5);
+
+    IGBT_Single_Pulse(pulse_spacing_us, number_of_iteration, pulse_length);
+    printf("Pulse Complete! \n");
+
+    //write_Hall_reading_to_txt(sensor_channel, 5);
+    //write_Hall_reading_to_txt(108);
+
+    // clean up our memory mapping and exit
+	//close_system();
+
+    munmap_peripherals();
+    close_physical_memory_device();
+
+	return( 0 );
+}
+*/
+
+// pulse delay pulse
+// H-bridge
+int main(int argc, char * argv[]) {
+
+	int igbt_pulse_num = 36;
+
+	unsigned int pulse_length[] = {atoi(argv[1])*50,
 									atoi(argv[2])*50,
 									atoi(argv[3])*50,
 									atoi(argv[4])*50,
@@ -771,82 +1102,43 @@ int main(int argc, char * argv[]) {
 									atoi(argv[35])*50,
 									atoi(argv[36])*50
 	}; // Quartus minimum resolution 20ns, convert into us
+
 	long unsigned pulse_spacing_us  = atoi(argv[37]);
-	unsigned int number_of_iteration = atoi(argv[38]);
+	unsigned int pulse_delay = atoi(argv[38]); // in us
+	unsigned int number_of_iteration = 1 ;
+	//
 
 	//int sensor_channel = atoi(argv[39]);
+	unsigned int pulse_length_1[igbt_pulse_num];
+	unsigned int pulse_length_2[igbt_pulse_num];
 
 	open_physical_memory_device();
     mmap_peripherals();
 
-/*  Control from C to FPGA
- * void *virtual_base;
-	int fd;
-	int loop_count;
-	int led_direction;
-	int led_mask;
-	void *h2p_lw_led_addr;
-
-	virtual_base = mmap( NULL, HW_REGS_SPAN, ( PROT_READ | PROT_WRITE ), MAP_SHARED, fd_dev_mem, HW_REGS_BASE );
-	if( virtual_base == MAP_FAILED ) {
-		printf( "ERROR: mmap() failed...\n" );
-		close( fd_dev_mem );
-		return( 1 );
-	}
-	//h2p_lw_led_addr=virtual_base + ( ( unsigned long  )( ALT_LWFPGASLVS_OFST + LED_PIO_BASE ) & ( unsigned long)( HW_REGS_MASK ) );
-
-	// Set address output to zero
-	*(uint32_t *)h2p_lw_led_addr = ~led_mask & IGBT_channel_all_off;
-
-	led_mask = (0x01 << channel[0]) | (0x01 << channel[1]);
-	*(uint32_t *)h2p_lw_led_addr = led_mask;9090
-
-	usleep(10);
-	*(uint32_t *)h2p_lw_led_addr = ~led_mask & IGBT_channel_all_off;
-	//printf("PulseTime = 50 \n");
-
-*/
-
-    //create_measurement_folder("CPMG");
-
-
-    // UDP test
-    UDP_TRANSMISSION_STATUS = UDP_TRANSMISSION_DISABLE;
-    if (UDP_TRANSMISSION_DISABLE){
-		UDP_TRANSMISSION_ON();
-		time_test_function();
-		UDP_TRANSMISSION_OFF();
+    // t 18 pulses pulse together
+    for(i = 0; i< igbt_pulse_num; i++){
+    	pulse_length_1[i] = 0;
+    }
+    for(i = 0; i< igbt_pulse_num/2; i++){
+    	pulse_length_1[i] = pulse_length[i];
     }
 
-	if (HUB_IN_USE){
-		tca_channel_select(HUB_channel_all_on, ENABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-5
-																	// HUB_channel_all_on/ HUB_channel_{X}_on, X = 0-5
-		// tca_channel_check
-		printf("Hall Effect Sensor connects to HUB\n");
-		//printf("ojbk");
-	}
-	else {
-		printf("Hall Effect Sensor directly connects to FPGA\n");
-	}
-
-
-    // pulse length < pulse_spacing. pulse_spacing should be as wide as pulse length, i.e. 50% duty cycle
-    for(i = 1; i< igbt_pulse_num-1; i++){
-    	if ( pulse_length[i]/50 >= pulse_spacing_us  ){
-	        printf("Error: duty cycle is smaller than pulse length! \n");
-	        close(fd_dev_mem);
-	        exit(EXIT_FAILURE);
-    	}
-
+    // second 18 pulses pulse together
+    for(i = 0; i< igbt_pulse_num; i++){
+    	pulse_length_2[i] = 0;
+    }
+    for(i = 0; i< igbt_pulse_num/2; i++){
+    	pulse_length_2[i+18] = pulse_length[i+18];
     }
 
-    //----------------Write Hall effect sensor--------------------//
-   	// Hall effect sensor address can be programmed
-    // wr_hall_sens_data(0, 36); // write Hall effect sensor address
-    //write_Hall_reading_to_txt(sensor_channel, 5);
+    IGBT_Single_Pulse(pulse_delay, number_of_iteration, pulse_length_1);
+    printf("First Pulse Complete! \n");
 
-    IGBT_Single_Pulse(pulse_spacing_us, number_of_iteration, pulse_length);
-    printf("Pulse Complete! \n");
+    usleep(pulse_delay);
+
+    IGBT_Single_Pulse(pulse_delay, number_of_iteration, pulse_length_2);
+    printf("Second Pulse Complete! \n");
+
 
     //write_Hall_reading_to_txt(sensor_channel, 5);
     //write_Hall_reading_to_txt(108);
@@ -859,3 +1151,643 @@ int main(int argc, char * argv[]) {
 
 	return( 0 );
 }
+/*/
+
+/*
+
+//------------------------------------------------------------------------------------
+// Hall Array
+
+// write/read file #define TCAADDR 0x70
+void tca_channel_select(uint8_t channel_addr, uint8_t en_mesg){
+
+	uint8_t TCAADDR = 0x70;	// hardwired address of TCA9548A is 0x70
+		//ext_1
+	/*
+		alt_write_word( (h2p_i2c_ext_1_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
+		check_i2c_isr_stat (h2p_i2c_ext_1_addr, en_mesg);
+		i2c_rxdata_flush(h2p_i2c_ext_1_addr, en_mesg);
+
+		alt_write_word( (h2p_i2c_ext_1_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
+
+		alt_write_word( (h2p_i2c_ext_1_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_1_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_1_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
+
+		alt_write_word( (h2p_i2c_ext_1_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (TCAADDR<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		alt_write_word( (h2p_i2c_ext_1_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | (channel_addr & I2C_DATA_MSK) );	 			//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+
+		//int
+		alt_write_word( (h2p_i2c_int_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
+		check_i2c_isr_stat (h2p_i2c_int_addr, en_mesg);
+		i2c_rxdata_flush(h2p_i2c_int_addr, en_mesg);
+
+		alt_write_word( (h2p_i2c_int_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
+
+		alt_write_word( (h2p_i2c_int_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_int_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_int_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
+
+		alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (TCAADDR<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | (channel_addr & I2C_DATA_MSK) );	 			//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+		/*
+		//ext
+		alt_write_word( (h2p_i2c_ext_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
+		check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		i2c_rxdata_flush(h2p_i2c_ext_addr, en_mesg);
+
+		alt_write_word( (h2p_i2c_ext_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
+
+		alt_write_word( (h2p_i2c_ext_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
+		alt_write_word( (h2p_i2c_ext_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
+
+		alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (TCAADDR<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+		alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | (channel_addr & I2C_DATA_MSK) );	 			//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+}
+
+uint32_t rd_hall_sens_2 (uint8_t i2c_addr_relay, uint8_t reg_addr, uint8_t en_mesg) { // read command for the hall sensor
+	//uint8_t i2c_addr_relay = 102 ;	// hardwired address of ALS31313 is 102
+	uint32_t dataout = 0;
+
+	alt_write_word( (h2p_i2c_ext_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
+	check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	i2c_rxdata_flush(h2p_i2c_ext_addr, en_mesg);
+
+	alt_write_word( (h2p_i2c_ext_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
+
+	alt_write_word( (h2p_i2c_ext_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
+	alt_write_word( (h2p_i2c_ext_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
+	alt_write_word( (h2p_i2c_ext_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
+
+	alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (i2c_addr_relay<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (0<<STO_SHFT) | (reg_addr & I2C_DATA_MSK) ); 								//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+	alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (i2c_addr_relay<<AD_SHFT) | (RD_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (0<<STO_SHFT) | ((0x00) & I2C_DATA_MSK) );							//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (0<<STO_SHFT) | ((0x00) & I2C_DATA_MSK) );							//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (0<<STO_SHFT) | ((0x00) & I2C_DATA_MSK) );							//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_ext_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | ((0x00) & I2C_DATA_MSK) );							//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+	i2c_wait_transfer(h2p_i2c_ext_addr);
+	usleep(10000); // this delay is important because i2c_wait_transfer apparently doesn't wait until transfer is complete. This can only be eliminated if interrupt is utilized.
+
+	// read 32-bit data inside the rx register. Mind that there's limit in fifo length stated in QSYS
+	dataout = (dataout << 8) | (alt_read_word(h2p_i2c_ext_addr+RX_DATA_OFST) & RX_DATA_MSK ) ; // read bit 31:24
+	dataout = (dataout << 8) | (alt_read_word(h2p_i2c_ext_addr+RX_DATA_OFST) & RX_DATA_MSK ) ; // read bit 23:16
+	dataout = (dataout << 8) | (alt_read_word(h2p_i2c_ext_addr+RX_DATA_OFST) & RX_DATA_MSK ) ; // read bit 15:8
+	dataout = (dataout << 8) | (alt_read_word(h2p_i2c_ext_addr+RX_DATA_OFST) & RX_DATA_MSK ) ; // read bit 7:0
+
+	alt_write_word( (h2p_i2c_ext_addr+CTRL_OFST), 0<<CORE_EN_SHFT); // disable i2c core
+
+	if (en_mesg) printf("dataout: %x\n", dataout);
+
+	return dataout;
+
+}
+
+uint32_t rd_hall_sens_1 (uint8_t i2c_addr_relay, uint8_t reg_addr, uint8_t en_mesg) { // read command for the hall sensor
+	//uint8_t i2c_addr_relay = 102 ;	// hardwired address of ALS31313 is 102
+	uint32_t dataout = 0;
+
+	alt_write_word( (h2p_i2c_int_addr+ISR_OFST) , RX_OVER_MSK|ARBLOST_DET_MSK|NACK_DET_MSK ); // RESET THE I2C FROM PREVIOUS ERRORS
+	check_i2c_isr_stat (h2p_i2c_int_addr, en_mesg);
+	i2c_rxdata_flush(h2p_i2c_int_addr, en_mesg);
+
+	alt_write_word( (h2p_i2c_int_addr+CTRL_OFST), 1<<CORE_EN_SHFT); // enable i2c core
+
+	alt_write_word( (h2p_i2c_int_addr+SCL_LOW_OFST), 250); // set the SCL_LOW_OFST to 250 for 100 kHz with 50 MHz clock
+	alt_write_word( (h2p_i2c_int_addr+SCL_HIGH_OFST), 250); // set the SCL_HIGH_OFST to 250 for 100 kHz with 50 MHz clock
+	alt_write_word( (h2p_i2c_int_addr+SDA_HOLD_OFST), 1); // set the SDA_HOLD_OFST to 1 as the default (datasheet requires min 0 ns hold time)
+
+	alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (i2c_addr_relay<<AD_SHFT) | (WR_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (0<<STO_SHFT) | (reg_addr & I2C_DATA_MSK) ); 								//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+	alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (1<<STA_SHFT) | (0<<STO_SHFT) | (i2c_addr_relay<<AD_SHFT) | (RD_I2C<<RW_D_SHFT) );	//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (0<<STO_SHFT) | ((0x00) & I2C_DATA_MSK) );							//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (0<<STO_SHFT) | ((0x00) & I2C_DATA_MSK) );							//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (0<<STO_SHFT) | ((0x00) & I2C_DATA_MSK) );							//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+	alt_write_word( (h2p_i2c_int_addr+TFR_CMD_OFST) , (0<<STA_SHFT) | (1<<STO_SHFT) | ((0x00) & I2C_DATA_MSK) );							//check_i2c_isr_stat (h2p_i2c_ext_addr, en_mesg);
+
+	i2c_wait_transfer(h2p_i2c_int_addr);
+	usleep(10000000); // this delay is important because i2c_wait_transfer apparently doesn't wait until transfer is complete. This can only be eliminated if interrupt is utilized.
+
+	// read 32-bit data inside the rx register. Mind that there's limit in fifo length stated in QSYS
+	dataout = (dataout << 8) | (alt_read_word(h2p_i2c_int_addr+RX_DATA_OFST) & RX_DATA_MSK ) ; // read bit 31:24
+	dataout = (dataout << 8) | (alt_read_word(h2p_i2c_int_addr+RX_DATA_OFST) & RX_DATA_MSK ) ; // read bit 23:16
+	dataout = (dataout << 8) | (alt_read_word(h2p_i2c_int_addr+RX_DATA_OFST) & RX_DATA_MSK ) ; // read bit 15:8
+	dataout = (dataout << 8) | (alt_read_word(h2p_i2c_int_addr+RX_DATA_OFST) & RX_DATA_MSK ) ; // read bit 7:0
+
+	alt_write_word( (h2p_i2c_int_addr+CTRL_OFST), 0<<CORE_EN_SHFT); // disable i2c core
+
+	if (en_mesg) printf("dataout: %x\n", dataout);
+
+	return dataout;
+
+}
+
+void rd_hall_sens_data (int board, uint8_t i2c_addr_relay, double *XGauss, double *YGauss, double *ZGauss, double *Temp, int enable_message ) {
+	uint32_t REG28;
+	uint32_t REG29;
+	switch(board)
+	{
+		case 1:
+			REG28 = rd_hall_sens_1 (i2c_addr_relay, Vola28_OFST, DISABLE_MESSAGE);
+			REG29 = rd_hall_sens_1 (i2c_addr_relay, Vola29_OFST, DISABLE_MESSAGE);
+			break;
+		case 2:
+			REG28 = rd_hall_sens_2 (i2c_addr_relay, Vola28_OFST, DISABLE_MESSAGE);
+			REG29 = rd_hall_sens_2 (i2c_addr_relay, Vola29_OFST, DISABLE_MESSAGE);
+			break;
+		case 3:
+			REG28 = rd_hall_sens_3 (i2c_addr_relay, Vola28_OFST, DISABLE_MESSAGE);
+			REG29 = rd_hall_sens_3 (i2c_addr_relay, Vola29_OFST, DISABLE_MESSAGE);
+			break;
+		default:
+			break;
+		}
+
+	int16_t XDigit, YDigit, ZDigit, TempDigit;
+	//double XGauss, YGauss, ZGauss, Temp;
+	XDigit 		= (((REG28>>Vola28_X_Axis_MSBs_OFST) & Vola28_X_Axis_MSBs_BASEMASK)<<4) 			| ((REG29>>Vola29_X_Axis_LSBs_OFST) & Vola29_X_Axis_LSBs_BASEMASK); // combine MSB and LSB
+	YDigit 		= (((REG28>>Vola28_Y_Axis_MSBs_OFST) & Vola28_Y_Axis_MSBs_BASEMASK)<<4)		 		| ((REG29>>Vola29_Y_Axis_LSBs_OFST) & Vola29_Y_Axis_LSBs_BASEMASK); // combine MSB and LSB
+	ZDigit 		= (((REG28>>Vola28_Z_Axis_MSBs_OFST) & Vola28_Z_Axis_MSBs_BASEMASK)<<4) 			| ((REG29>>Vola29_Z_Axis_LSBs_OFST) & Vola29_Z_Axis_LSBs_BASEMASK); // combine MSB and LSB
+	TempDigit 	= (((REG28>>Vola28_Temperature_MSBs_OFST) & Vola28_Temperature_MSBs_BASEMASK)<<6) 	| ((REG29>>Vola29_Temperature_LSBs_OFST) & Vola29_Temperature_LSBs_BASEMASK); // combine MSB and LSB
+
+	// The integer container is 16-bit signed, so we need to shift by 4 because the data is 12-bit signed value. We need to maintain the sign at MSB.
+	XDigit = XDigit << 4;
+	YDigit = YDigit << 4;
+	ZDigit = ZDigit << 4;
+	TempDigit = TempDigit << 4;
+
+	// There is a problem about TempDigit where the first digit should be always 1. In test, it is found sometimes it is turned to zero.
+	// Force the digit to 1 now
+	TempDigit = TempDigit | Temperature_FIRSTBIT_MSK;
+
+	*XGauss = ((double) XDigit/16) / 1; // divide by 1 and .25 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
+	*YGauss = ((double) YDigit/16) / 1;
+	*ZGauss = ((double) ZDigit/16) / 1;
+	*Temp = 273.15 + (((double) TempDigit/16) / 8); // divide by 8 is coming from datasheet. Divide by 16 is coming from shift by 4 factor above.
+
+	if(enable_message)
+	{
+		printf("sensor address %d \n ", i2c_addr_relay);
+		printf("X = %5.2f Gauss\n", *XGauss);
+		printf("Y = %5.2f Gauss\n", *YGauss);
+		printf("Z = %5.2f Gauss\n", *ZGauss);
+		printf("Temp = %5.2f %%C\n", *Temp);
+		printf("\n");
+	}
+
+//	if (UDP_TRANSMISSION_STATUS){
+		//sprintf(udp_buffer,"\t, %d \t , %5.2f \t , %5.2f \t , %5.2f \t , %5.2f \n",i2c_addr_relay,XGauss,YGauss,ZGauss,Temp);
+//		sprintf(udp_buffer, "%5.2f, %5.2f, %5.2f, %5.2f\n",XGauss,YGauss,ZGauss,Temp);
+//		n=sendto(udp_sock, udp_buffer, strlen(udp_buffer),0,(const struct sockaddr *)&udp_server, udp_length);
+//		if (n < 0) printf("Sendto\n\r");
+//	}
+//	else
+//		fprintf(fptr, "\t, %d \t , %5.2f \t , %5.2f \t , %5.2f \t , %5.2f \n",i2c_addr_relay,XGauss,YGauss,ZGauss,Temp);
+		//fprintf(fptr, "%5.2f, %5.2f, %5.2f, %5.2f",XGauss,YGauss,ZGauss,Temp);
+}
+
+void write_Hall_reading_to_txt(int channel, uint32_t sensor_address){
+
+	double XGauss, YGauss, ZGauss, Temp;
+
+	fptr = fopen(pathname, "a+");
+
+	fprintf(fptr, "Sensor: %d, %d,",channel, sensor_address);
+	//read all three boards sensor_address
+
+	rd_hall_sens_data(1, sensor_address, &XGauss, &YGauss, &ZGauss, &Temp, enable_message);
+	fprintf(fptr, "%5.2f, %5.2f, %5.2f, %5.2f",XGauss,YGauss,ZGauss,Temp);
+	usleep(10000);
+	fprintf(fptr, ",");
+	/*
+	rd_hall_sens_data(2, sensor_address, &XGauss, &YGauss, &ZGauss, &Temp, enable_message);
+	fprintf(fptr, "%5.2f, %5.2f, %5.2f, %5.2f",XGauss,YGauss,ZGauss,Temp);
+	usleep(10000);
+	fprintf(fptr, ",");
+
+	rd_hall_sens_data(3, sensor_address, &XGauss, &YGauss, &ZGauss, &Temp, enable_message);
+	fprintf(fptr, "%5.2f, %5.2f, %5.2f, %5.2f",XGauss,YGauss,ZGauss,Temp);
+	usleep(10000);
+
+	fprintf(fptr, "\n");
+
+	fclose(fptr);
+}
+
+
+int main(int argc, char * argv[]) {
+
+	open_physical_memory_device();
+    mmap_peripherals();
+
+    int num_iteration = atoi(argv[1]); // number of iterations
+    enable_message = 1;
+    enable_message = atoi(argv[2]);		// enable message from hub and sensor
+
+// Control from C to FPGA
+// * void *virtual_base;
+//	int fd;
+//	int loop_count;
+//	int led_direction;
+//	int led_mask;
+//	void *h2p_lw_led_addr;
+
+//	virtual_base = mmap( NULL, HW_REGS_SPAN, ( PROT_READ | PROT_WRITE ), MAP_SHARED, fd_dev_mem, HW_REGS_BASE );
+//	if( virtual_base == MAP_FAILED ) {
+//		printf( "ERROR: mmap() failed...\n" );
+//		close( fd_dev_mem );
+//		return( 1 );
+//	}
+//	//h2p_lw_led_addr=virtual_base + ( ( unsigned long  )( ALT_LWFPGASLVS_OFST + LED_PIO_BASE ) & ( unsigned long)( HW_REGS_MASK ) );
+
+//	// Set address output to zero
+//	*(uint32_t *)h2p_lw_led_addr = ~led_mask & IGBT_channel_all_off;
+
+//	led_mask = (0x01 << channel[0]) | (0x01 << channel[1]);
+//	*(uint32_t *)h2p_lw_led_addr = led_mask;9090
+
+//	usleep(10);
+//	*(uint32_t *)h2p_lw_led_addr = ~led_mask & IGBT_channel_all_off;
+
+
+    //create_measurement_folder("CPMG");
+
+    // UDP test
+    UDP_TRANSMISSION_STATUS = UDP_TRANSMISSION_DISABLE;
+    if (UDP_TRANSMISSION_DISABLE){
+		UDP_TRANSMISSION_ON();
+		time_test_function();
+		UDP_TRANSMISSION_OFF();
+    }
+
+//	if (HUB_IN_USE){
+//		tca_channel_select(HUB_channel_all_on, ENABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-5
+																	// HUB_channel_all_on/ HUB_channel_{X}_on, X = 0-5
+		// tca_channel_check
+//		printf("Hall Effect Sensor connects to HUB\n");
+		//printf("ojbk");
+//	}
+//	else {
+//		printf("Hall Effect Sensor directly connects to FPGA\n");
+//	}
+
+	//Set time
+	time_t t = time(NULL);
+	struct tm *local = localtime(&t);
+    sprintf(pathname,"%04d_%02d_%02d_%02d_%02d_%02d_%s", local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec,"HallArrayReading.csv");
+
+    int k = 0;
+    int CH_Address_size[8]= {6, 5, 5, 5, 5, 5, 5, 6};
+ //   for(k = 0; k < 8 ; k++)
+ //   {
+ //   	CH_Address[k] = malloc (sizeof(int) * CH_Address_size[k]);
+//    }
+//---------------------//
+    int CH_Selected[8][6] = {
+    		{96, 97, 99, 0, 101, 109},	//sensor addr 0
+			{96, 97, 99, 100, 108},		//sensor addr 1
+			{96, 97, 99, 100, 108}, 	//sensor addr 2
+			{96, 97, 99, 0, 107}, 		//sensor addr 3
+			{96, 97, 99, 100, 108},		//sensor addr 4
+			{96, 97, 99, 100, 108},		//sensor addr 5
+			{96, 97, 99, 100, 108},		//sensor addr 6
+    		{96, 97, 99, 100, 101, 108}	//sensor addr 7
+			};
+    int8_t channel_command = 0b00000001;
+
+	printf("Read channels 0 to 7\n");
+
+
+    // channel selection
+    for(i = 0; i < 8; i++){
+
+    	// choose selected channel
+    	channel_command = channel_command << i;
+    	tca_channel_select(channel_command, ENABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		printf("channel %d Start! \n", i);
+
+		for(k = 0; k < CH_Address_size[k]+1; k++){
+			printf("%d",k);
+			printf("sensor address %d\n",CH_Selected[i][k]);
+    		write_Hall_reading_to_txt(i,CH_Selected[i][k]);
+    		usleep(100000);
+    		//reset
+    		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+    		tca_channel_select(channel_command, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+    	}
+    }
+
+    for(i=0; i < num_iteration; i++)
+	{
+		printf("Read channels 7 to 0\n");
+
+		printf("channel 7 Start! \n");
+		tca_channel_select(HUB_channel_7_on, enable_message); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(7,96);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_7_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(7,97);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_7_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(7,99);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_7_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(7,100);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_7_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(7,101);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_7_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(7,108);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_7_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		printf("Read channel 7 Complete! \n");
+
+		printf("channel 6 Start! \n");
+		tca_channel_select(HUB_channel_6_on, enable_message); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(6,96);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_6_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(6,97);
+		usleep(10000);
+
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_6_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(6,99);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_6_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(6,100);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_6_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(6,108);
+
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_6_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		printf("Read channel 6 Complete! \n");
+
+		printf("channel 5 Start! \n");
+		tca_channel_select(HUB_channel_5_on, enable_message); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(5,96);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_5_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(5,97);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_5_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(5,99);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_5_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(5,100);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_5_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(5,108);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_5_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		printf("Read channel 5 Complete! \n");
+
+		printf("channel 4 Start! \n");
+		tca_channel_select(HUB_channel_4_on, enable_message); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(4,96);
+		usleep(10000);
+
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_4_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(4,97);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_4_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(4,99);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_4_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(4,100);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_4_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(4,108);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_4_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		printf("Read channel 4 Complete! \n");
+
+		printf("channel 3 Start! \n");
+		tca_channel_select(HUB_channel_3_on, enable_message); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(3,96);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_3_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(3,97);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_3_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(3,99);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_3_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(3,0);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_3_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(3,107);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_3_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		printf("Read channel 3 Complete! \n");
+
+		printf("channel 2 Start! \n");
+		tca_channel_select(HUB_channel_2_on, enable_message); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(2,96);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_2_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(2,97);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_2_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(2,99);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_2_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(2,100);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_2_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(2,108);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_2_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		printf("Read channel 2 Complete! \n");
+
+		printf("channel 1 Start! \n");
+		tca_channel_select(HUB_channel_1_on, enable_message); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(1,96);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_1_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(1,97);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_1_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(1,99);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_1_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(1,100);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_1_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(1,108);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_1_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		printf("Read channel 1 Complete! \n");
+
+		printf("channel 0 Start! \n");
+		tca_channel_select(HUB_channel_0_on, enable_message); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		write_Hall_reading_to_txt(0,96);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_0_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(0,97);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_0_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(0,99);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_0_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(0,0);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_0_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(0,101);
+		usleep(10000);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_0_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		write_Hall_reading_to_txt(0,109);
+		tca_channel_select(HUB_channel_all_off, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+		usleep(10000);
+		tca_channel_select(HUB_channel_0_on, DISABLE_MESSAGE); 	// tca_channel_select(uint8_t channel_addr, uint8_t en_mesg); channel_addr 0-7
+
+		printf("Read channel 0 Complete! \n");
+	}
+
+    // clean up our memory mapping and exit
+	//close_system();
+
+    munmap_peripherals();
+    close_physical_memory_device();
+
+	return( 0 );
+}
+*/
+

@@ -29,8 +29,8 @@
 									<listOptionValue builtIn="false" value="soc_cv_av"/>
 								</option>
 								<option id="gnu.c.compiler.option.include.paths.70654729" name="Include paths (-I)" superClass="gnu.c.compiler.option.include.paths" useByScannerDiscovery="false" valueType="includePath">
-									<listOptionValue builtIn="false" value="&quot;C:\intelFPGA\18.0\embedded\ip\altera\hps\altera_hps\hwlib\include\soc_cv_av&quot;"/>
-									<listOptionValue builtIn="false" value="&quot;C:\intelFPGA\18.0\embedded\ip\altera\hps\altera_hps\hwlib\include&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;C:\intelFPGA\18.1\embedded\ip\altera\hps\altera_hps\hwlib\include\soc_cv_av&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;C:\intelFPGA\18.1\embedded\ip\altera\hps\altera_hps\hwlib\include&quot;"/>
 								</option>
 								<option id="gnu.c.compiler.option.optimization.level.157027816" name="Optimization Level" superClass="gnu.c.compiler.option.optimization.level" useByScannerDiscovery="false" value="gnu.c.optimization.level.none" valueType="enumerated"/>
 								<option id="gnu.c.compiler.option.debugging.level.1127225383" name="Debug Level" superClass="gnu.c.compiler.option.debugging.level" useByScannerDiscovery="false"/>
@@ -124,4 +124,5 @@
 			<resource resourceType="PROJECT" workspacePath="/IGBT_DE10_Nano_Eclipse_v1.0"/>
 		</configuration>
 	</storageModule>
+	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cproject>

@@ -82,7 +82,8 @@ void *h2p_nmr_sys_pll_addr					= NULL; // nmr system pll reconfiguration
 void *h2p_analyzer_pll_addr					= NULL;
 
 // IGBT pulse fsm parameter
-void *h2p_igbt_pulse_addr[31]					= {NULL}; // igbt pulse length
+void *h2p_igbt_pulse_addr[35]					= {NULL}; // igbt pulse length
+/*
 void *h2p_igbt_pulse_addr2						= NULL;
 void *h2p_igbt_pulse_addr3						= NULL;
 void *h2p_igbt_pulse_addr4						= NULL;
@@ -103,7 +104,7 @@ void *h2p_igbt_pulse_addr18						= NULL;
 
 
 void *h2p_igbt_pulse_addr35						= NULL;
-
+*/
 
 
 // NMR sequence fsm parameter addresses
@@ -195,6 +196,7 @@ unsigned int *rddata;
 unsigned int *rddata_16;
 char foldername[50]; // variable to store folder name of the measurement data
 char pathname[60];
+char pathname_tmp[60];
 
 // FPGA control signal address
 uint32_t ctrl_out = CNT_OUT_default;					// default variable to store the current control state

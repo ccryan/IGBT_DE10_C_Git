@@ -53,7 +53,7 @@
 #define PSU_5V_ANA_N_EN_msk		(1<<PSU_5V_ANA_N_EN_ofst)
 
 #define CNT_I2C_default		0b0000000000000000
-
+#define IGBT_Pulse_Channel		(36)
 
 
 // Offsets for input status signal
@@ -74,8 +74,14 @@
 #define ENABLE 1
 #define DISABLE 0
 
+int enable_message;
+
 // RX signal path
 #define SIG_NORM_PATH	0
 #define SIG_S11_PATH	1
 
 #define SEL_ADC1746		1
+
+// Only turn on one for I2C_EXT_1, I2C_EXT
+//#define I2C_EXT_1		1
+#define I2C_EXT 		1
